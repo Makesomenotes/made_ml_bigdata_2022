@@ -1,0 +1,2 @@
+direct_calculation.py: mean - 152.7206871868289, var - 57672.84569843345
+hadoop result: mean - 152.7206871868289, var - 57672.84569843346
