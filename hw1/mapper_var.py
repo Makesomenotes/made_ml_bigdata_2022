@@ -11,7 +11,7 @@ for line in line_gen:
 	count += 1  # no nans in csv
     price_lst.append(float(line[9]))
 mean = cum_sum / count
-var_lst = [(cur_price - mean) ** 2 for cur_price in in price_lst]
+var_lst = [(cur_price - mean) ** 2 for cur_price in price_lst]
 var = sum(var_lst) / count
 
 print(count, mean, var, sep=",")
