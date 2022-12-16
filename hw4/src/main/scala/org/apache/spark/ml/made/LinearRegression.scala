@@ -12,26 +12,22 @@ import org.apache.spark.sql.{DataFrame, Dataset, Encoder}
 
 
 
-trait LinearRegressionParams extends HasInputCol with HasOutputCol {
+trait LinearRegressionParams 
+  extends HasInputCol 
+  with HasOutputCol {
   def setInputCol(value: String) : this.type = set(inputCol, value)
   def setOutputCol(value: String): this.type = set(outputCol, value)
 
   val iters = new IntParam(this, "iters", "Number of iterations")
-  def getIters: Int = $(iters)
-  def setIters(value: Int): this.type = set(iters, value)
 
-  val learningRate = new DoubleParam(this, "learningRate", "Learning rate")
-  def getLearningRate: Double = $(learningRate)
-  def setLearningRate(value: Double): this.type = set(learningRate, value)
+  def get_iters: Int = $(iters)
+  def set_iters(value: Int): this.type = set(iters, value)
+  val lr = new DoubleParam(this, "lr", "step size")
+  def get_lr: Double = $(lr)
+  def set_lr(value: Double): this.type = set(lr, value)
 
-  val eps = new DoubleParam(this, "eps", "EPS")
-  def getEps: Double = $(eps)
-  def setEps(value: Double): this.type = set(eps, value)
-
-
-  setDefault(iters, 100)
-  setDefault(eps, 1e-4)
-  setDefault(learningRate, 1e-1)
+  setDefault(iters, 100000)
+  setDefault(lr, 1e-3)
 
   protected def validateAndTransformSchema(schema: StructType): StructType = {
     SchemaUtils.checkColumnType(schema, getInputCol, new VectorUDT())
@@ -46,51 +42,41 @@ trait LinearRegressionParams extends HasInputCol with HasOutputCol {
 }
 
 
-class LinearRegression(override val uid: String) extends Estimator[LinearRegressionModel] with LinearRegressionParams
+class LinearRegression(override val uid: String) 
+  extends Estimator[LinearRegressionModel] 
+  with LinearRegressionParams
   with DefaultParamsWritable {
 
   def this() = this(Identifiable.randomUID("linearRegression"))
 
   override def fit(dataset: Dataset[_]): LinearRegressionModel = {
 
-    // Used to convert untyped dataframes to datasets with vectors
     implicit val encoder : Encoder[Vector] = ExpressionEncoder()
-
     val vectors: Dataset[Vector] = dataset.select(dataset($(inputCol)).as[Vector])
-
     val dim: Int = AttributeGroup.fromStructField((dataset.schema($(inputCol)))).numAttributes.getOrElse(
       vectors.first().size
     )
     val weights = 2.0 * breeze.linalg.DenseVector.rand[Double](dim) - 1.0 // breeze.linalg.DenseVector(0.0, 0.0, 0.0, 0.0)//
 
-    val iters: Int = getIters
-    val learningRate: Double = getLearningRate
-    val eps: Double = getEps
-    val sampleCount: Double = vectors.count()
-    val meanlearningRate: Double = learningRate / sampleCount
+    val iters: Int = get_iters
+    val lr: Double = get_lr
+    val count: Double = vectors.count()
+    val mean_lr Double = lr / count
 
     var i: Int = 0
-    while (iters > i) {
-      val loss = vectors.rdd.mapPartitions(partition => {
-        partition.map(row => {
-          val vec = new DenseVector(1.0 +: row.toArray).asBreeze
-          val features = vec(0 until dim).toDenseVector
-          val y = vec(dim)
-          ((features dot weights) - y)  * features
+    for (i <- 0 to iters) {
+      val loss = features.rdd.mapPartitions((data: Iterator[Vector]) => {
+        val summarizer = new MultivariateOnlineSummarizer()
+        data.foreach(v => { val X = v.asBreeze(0 until weights.size).toDenseVector
+          val y = v.asBreeze(-1)
+          val grads = X * (breeze.linalg.sum(X * weights) - y)
+          summarizer.add(mllib.linalg.Vectors.fromBreeze(grads))
         })
-      }).reduce(_+_)
-
-      weights -= meanlearningRate * loss
-
-      //println(s"iter=$i, weights=$weights")
-
-      val GradientL2: Double = weights.foldLeft(0.0)(_ + Math.pow(_, 2))
-      if (GradientL2 < eps * eps) {
-        i = iters
-      }
-      i += 1
-
+        Iterator(summarizer)
+      }).reduce(_ merge _)
+      weights = weights - mean_lr * loss.mean.asBreeze
     }
+    
     copyValues(new LinearRegressionModel(Vectors.fromBreeze(weights))).setParent(this)
   }
 
@@ -104,7 +90,8 @@ object LinearRegression extends DefaultParamsReadable[LinearRegression]
 
 class LinearRegressionModel private[made](
                                          override val uid: String,
-                                         val stds: DenseVector) extends Model[LinearRegressionModel] with LinearRegressionParams with MLWritable {
+                                         val stds: DenseVector) extends Model[LinearRegressionModel] 
+   with LinearRegressionParams with MLWritable {
 
 
   def this(stds: Vector) =
